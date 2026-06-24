@@ -17,17 +17,26 @@ export const supabase = createClient(supabaseUrl, supabaseServiceKey, {
   },
 });
 
-// Typed table helpers
+// Table name constants — all tables use the leadenricher_ prefix
+export const TABLES = {
+  centers: "leadenricher_centers",
+  leads: "leadenricher_leads",
+  batches: "leadenricher_batches",
+} as const;
+
 export type CenterStatus = "pending" | "skipped" | "enriched" | "not_found";
 
 export interface Center {
   id: string;
   name: string;
   website: string | null;
+  source_page: string | null;
   domain: string | null;
+  no_website: boolean;
   raw_url: string | null;
   status: CenterStatus;
   skip_reason: string | null;
+  source_method: "domain_search" | "name_search";
   batch_id: string | null;
   created_at: string;
 }
@@ -44,6 +53,8 @@ export interface Lead {
   title: string | null;
   organization: string | null;
   email_status: string | null;
+  country: string | null;
+  source_method: "domain_search" | "name_search";
   created_at: string;
 }
 
@@ -54,5 +65,6 @@ export interface Batch {
   enriched: number;
   not_found: number;
   skipped: number;
+  discarded: number;
   created_at: string;
 }

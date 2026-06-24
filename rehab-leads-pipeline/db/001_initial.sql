@@ -1,5 +1,8 @@
 -- ============================================================
--- 001_initial.sql  (mirrors db/001_initial.sql)
+-- 001_initial.sql
+-- Run this once in Supabase SQL editor (or psql) to bootstrap
+-- the rehab leads pipeline schema.
+-- All tables are prefixed with leadenricher_
 -- ============================================================
 
 create table leadenricher_centers (
@@ -45,6 +48,12 @@ create table leadenricher_batches (
 create unique index leadenricher_leads_apollo_id_idx  on leadenricher_leads(apollo_id);
 create        index leadenricher_centers_batch_id_idx on leadenricher_centers(batch_id);
 create        index leadenricher_centers_status_idx   on leadenricher_centers(status);
+
+-- ============================================================
+-- Row Level Security
+-- Service role bypasses RLS automatically (service_role key).
+-- Anon/authenticated users have no access.
+-- ============================================================
 
 alter table leadenricher_centers enable row level security;
 alter table leadenricher_leads   enable row level security;
