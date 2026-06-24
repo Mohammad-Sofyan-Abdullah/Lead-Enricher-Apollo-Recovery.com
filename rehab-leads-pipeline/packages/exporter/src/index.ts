@@ -178,6 +178,7 @@ export async function exportXLSX(leads: OutputLead[]): Promise<Buffer> {
 
   // Auto-fit column widths: measure every cell, clamp to [15, 60]
   worksheet.columns.forEach((col) => {
+    if (!col || !col.eachCell) return;
     let maxLen = (col.header?.toString() ?? "").length;
     col.eachCell({ includeEmpty: true }, (cell) => {
       const v = cell.value;

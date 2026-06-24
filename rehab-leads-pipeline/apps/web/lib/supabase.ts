@@ -39,6 +39,7 @@ export interface Center {
   source_method: "domain_search" | "name_search";
   batch_id: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface Lead {
@@ -47,6 +48,7 @@ export interface Lead {
   center_id: string | null;
   center_name: string | null;
   website: string | null;
+  source_page: string | null;
   full_name: string;
   email: string | null;
   linkedin_url: string | null;
@@ -56,6 +58,7 @@ export interface Lead {
   country: string | null;
   source_method: "domain_search" | "name_search";
   created_at: string;
+  updated_at: string;
 }
 
 export interface Batch {
@@ -67,4 +70,5 @@ export interface Batch {
   skipped: number;
   discarded: number;
   created_at: string;
+  updated_at: string;
 }
