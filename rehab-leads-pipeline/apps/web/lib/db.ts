@@ -81,6 +81,56 @@ export async function setCenterStatus(
     .eq("id", centerId);
 }
 
+// ── Centers (bulk) ───────────────────────────────────────────────────────────
+
+export interface CenterInsertRow {
+  name: string;
+  cleanUrl: string;
+  sourcePage: string;
+  rawUrl: string;
+  domain: string;
+  noWebsite: boolean;
+  sourceMethod: "domain_search" | "name_search";
+  status: "valid" | "skipped";
+  skipReason?: string;
+  note?: string;
+}
+
+/**
+ * Bulk-inserts a batch of cleaned centers. Maps CleanedCenter fields to DB columns.
+ * valid → status 'pending', skipped → status 'skipped'.
+ */
+export async function saveCenters(
+  centers: CenterInsertRow[],
+  batchId: string
+): Promise<void> {
+  if (!centers.length) return;
+
+  const CHUNK = 100;
+  const rows = centers.map((c) => ({
+    name: c.name,
+    website: c.cleanUrl || null,
+    source_page: c.sourcePage || null,
+    raw_url: c.rawUrl || null,
+    domain: c.domain || null,
+    no_website: c.noWebsite,
+    source_method: c.sourceMethod,
+    status: c.status === "valid" ? "pending" : "skipped",
+    skip_reason: c.skipReason ?? null,
+    batch_id: batchId,
+  }));
+
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const { error } = await supabase
+      .from(TABLES.centers)
+      .insert(rows.slice(i, i + CHUNK));
+
+    if (error) {
+      console.error(`saveCenters error (chunk ${Math.floor(i / CHUNK) + 1}):`, error.message);
+    }
+  }
+}
+
 // ── Leads ────────────────────────────────────────────────────────────────────
 
 export async function upsertLead(

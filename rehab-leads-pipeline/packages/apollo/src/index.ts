@@ -52,11 +52,10 @@ const RETRY_BACKOFF_MS = 1000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+// Structural minimum required by processCenters — satisfied by @rehab-leads/cleaner CleanedCenter
 export interface CleanedCenter {
-  id: string;
   name: string;
   domain: string; // empty string when no website
-  batchId: string;
 }
 
 export interface SearchResult {

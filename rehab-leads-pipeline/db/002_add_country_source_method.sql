@@ -11,3 +11,4 @@ alter table leadenricher_leads
 
 alter table leadenricher_batches
   add column if not exists discarded int not null default 0;
+
