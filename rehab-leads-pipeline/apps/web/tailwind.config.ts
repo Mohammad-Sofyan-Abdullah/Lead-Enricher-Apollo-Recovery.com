@@ -9,11 +9,14 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        brand: {
-          50: "#f0f9ff",
-          500: "#0ea5e9",
-          900: "#0c4a6e",
-        },
+        navy:     "#1E3A5F",
+        verified: "#16A34A",
+        warning:  "#D97706",
+        danger:   "#DC2626",
+        muted:    "#6B7280",
+      },
+      fontFamily: {
+        sans: ["var(--font-inter)", "system-ui", "sans-serif"],
       },
     },
   },

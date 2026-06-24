@@ -339,6 +339,31 @@ export async function deleteBatch(batchId: string): Promise<void> {
   if (batchErr) throw new Error(`deleteBatch (delete batch): ${batchErr.message}`);
 }
 
+// ── getBatchById ──────────────────────────────────────────────────────────────
+
+export async function getBatchById(batchId: string): Promise<BatchSummary | null> {
+  const { data, error } = await supabase
+    .from(TABLES.batches)
+    .select("*")
+    .eq("id", batchId)
+    .maybeSingle();
+
+  if (error) throw new Error(`getBatchById: ${error.message}`);
+  if (!data) return null;
+
+  return {
+    id: data.id,
+    label: data.label,
+    totalCenters: data.total_centers,
+    enriched: data.enriched,
+    notFound: data.not_found,
+    skipped: data.skipped,
+    discarded: data.discarded,
+    createdAt: data.created_at,
+    updatedAt: data.updated_at,
+  };
+}
+
 // ── Helpers used by API routes ────────────────────────────────────────────────
 
 export async function getPendingCentersByBatch(batchId: string): Promise<Center[]> {
