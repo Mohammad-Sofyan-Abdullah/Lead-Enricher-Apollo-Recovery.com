@@ -1,0 +1,20 @@
+{
+  "name": "rehab-leads-pipeline",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "lint": "pnpm --filter web lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.43.5",
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.8"
+  }
+}
