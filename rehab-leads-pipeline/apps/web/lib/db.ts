@@ -1,10 +1,17 @@
 import { supabase, TABLES } from "./supabase";
-import type { Center, CenterStatus, Batch } from "./supabase";
-import type { OutputLead, SkippedCenter } from "@rehab-leads/exporter";
+import type { CenterStatus } from "./supabase";
+import type {
+  Center,
+  CleanedCenter,
+  OutputLead,
+  SkippedCenter,
+  BatchStats,
+} from "@pipeline/types";
 
-export type { Center, Batch };
+// Re-export shared types consumed by components
+export type { BatchStats };
 
-// ── Exported API shapes ───────────────────────────────────────────────────────
+// ── Local types ───────────────────────────────────────────────────────────────
 
 export interface BatchSummary {
   id: string;
@@ -16,14 +23,6 @@ export interface BatchSummary {
   discarded: number;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface BatchStats {
-  total: number;
-  enriched: number;
-  notFound: number;
-  skipped: number;
-  discarded: number;
 }
 
 export interface SaveLeadInput {
@@ -42,6 +41,42 @@ export interface SaveLeadInput {
   sourceMethod: "domain_search" | "name_search";
 }
 
+// ── Internal DB row type (snake_case, mirrors Supabase schema) ────────────────
+
+interface DbCenterRow {
+  id: string;
+  name: string;
+  website: string | null;
+  source_page: string | null;
+  raw_url: string | null;
+  domain: string | null;
+  no_website: boolean;
+  source_method: "domain_search" | "name_search";
+  status: "pending" | "enriched" | "not_found" | "skipped";
+  skip_reason: string | null;
+  batch_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapCenter(row: DbCenterRow): Center {
+  return {
+    id: row.id,
+    name: row.name,
+    website: row.website,
+    sourcePage: row.source_page,
+    rawUrl: row.raw_url,
+    domain: row.domain,
+    noWebsite: row.no_website,
+    sourceMethod: row.source_method,
+    status: row.status,
+    skipReason: row.skip_reason,
+    batchId: row.batch_id ?? "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 // ── 1. saveBatch ──────────────────────────────────────────────────────────────
 
 export async function saveBatch(params: {
@@ -53,26 +88,13 @@ export async function saveBatch(params: {
     { id: params.id, label: params.label, total_centers: params.totalCenters },
     { onConflict: "id" }
   );
-  if (error) throw new Error(`saveBatch: ${error.message}`);
+  if (error) throw new Error(`DB error in saveBatch: ${error.message}`);
 }
 
 // ── 2. saveCenters ────────────────────────────────────────────────────────────
 
-interface CleanedCenterInput {
-  name: string;
-  cleanUrl?: string;
-  sourcePage?: string;
-  rawUrl?: string;
-  domain?: string;
-  noWebsite: boolean;
-  sourceMethod: "domain_search" | "name_search";
-  status: "valid" | "skipped";
-  skipReason?: string;
-  note?: string;
-}
-
 export async function saveCenters(
-  centers: CleanedCenterInput[],
+  centers: CleanedCenter[],
   batchId: string
 ): Promise<Center[]> {
   if (!centers.length) return [];
@@ -99,8 +121,8 @@ export async function saveCenters(
       .insert(rows.slice(i, i + CHUNK))
       .select();
 
-    if (error) throw new Error(`saveCenters chunk ${Math.floor(i / CHUNK) + 1}: ${error.message}`);
-    if (data) inserted.push(...(data as Center[]));
+    if (error) throw new Error(`DB error in saveCenters chunk ${Math.floor(i / CHUNK) + 1}: ${error.message}`);
+    if (data) inserted.push(...(data as DbCenterRow[]).map(mapCenter));
   }
 
   return inserted;
@@ -115,51 +137,52 @@ export async function updateCenterStatus(
 ): Promise<void> {
   const { error } = await supabase
     .from(TABLES.centers)
-    .update({ status, skip_reason: skipReason ?? null, updated_at: new Date().toISOString() })
+    .update({ status, skip_reason: skipReason ?? null })
     .eq("id", centerId);
 
-  if (error) throw new Error(`updateCenterStatus: ${error.message}`);
+  if (error) throw new Error(`DB error in updateCenterStatus: ${error.message}`);
 }
 
 // ── 4. saveLead ───────────────────────────────────────────────────────────────
-// CRITICAL DEDUP RULE: Before inserting, check if a row with this apollo_id
-// already exists in the leads table. If it does, return 'duplicate' immediately
-// — do NOT update the existing row, do NOT insert again.
+// CRITICAL DEDUP RULE: check apollo_id first. If already exists, return
+// "duplicate" immediately — never update or re-insert the same person.
 
 export async function saveLead(
   lead: SaveLeadInput
 ): Promise<"saved" | "duplicate"> {
-  const { data: existing } = await supabase
+  const { data: existing, error: checkErr } = await supabase
     .from(TABLES.leads)
     .select("apollo_id")
     .eq("apollo_id", lead.apolloId)
     .maybeSingle();
 
+  if (checkErr) throw new Error(`DB error in saveLead (check): ${checkErr.message}`);
   if (existing) return "duplicate";
 
-  const { error } = await supabase.from(TABLES.leads).insert({
+  const insertData = {
     apollo_id: lead.apolloId,
     center_id: lead.centerId,
     center_name: lead.centerName,
-    website: lead.website || null,
-    source_page: lead.sourcePage || null,
+    website: lead.website ?? null,
     full_name: lead.fullName,
-    email: lead.email,
-    email_status: lead.emailStatus,
-    linkedin_url: lead.linkedinUrl,
-    title: lead.title,
-    organization: lead.org,
-    country: lead.country,
-    source_method: lead.sourceMethod,
-  });
+    email: lead.email ?? null,
+    linkedin_url: lead.linkedinUrl ?? null,
+    title: lead.title ?? null,
+    organization: lead.org ?? null,
+    email_status: lead.emailStatus ?? null,
+    country: lead.country ?? null,
+    source_method: lead.sourceMethod ?? "domain_search",
+    ...(lead.sourcePage != null ? { source_page: lead.sourcePage } : {}),
+  };
 
-  if (error) throw new Error(`saveLead: ${error.message}`);
+  const { error } = await supabase.from(TABLES.leads).insert(insertData);
+
+  if (error) throw new Error(`DB error in saveLead (insert): ${error.message}`);
   return "saved";
 }
 
 // ── 5. getLeadsByBatch ────────────────────────────────────────────────────────
 // Two-step: get center IDs for batch → get leads for those centers.
-// Returns OutputLead[] (camelCase, ready for exporter functions).
 
 export async function getLeadsByBatch(batchId: string): Promise<OutputLead[]> {
   const { data: centerRows, error: centerErr } = await supabase
@@ -167,19 +190,25 @@ export async function getLeadsByBatch(batchId: string): Promise<OutputLead[]> {
     .select("id")
     .eq("batch_id", batchId);
 
-  if (centerErr) throw new Error(`getLeadsByBatch (centers): ${centerErr.message}`);
+  if (centerErr) throw new Error(`DB error in getLeadsByBatch (centers): ${centerErr.message}`);
   const centerIds = (centerRows ?? []).map((c: { id: string }) => c.id);
   if (!centerIds.length) return [];
 
-  const { data, error } = await supabase
-    .from(TABLES.leads)
-    .select("*")
-    .in("center_id", centerIds)
-    .order("created_at", { ascending: true });
+  // Chunk into 50-ID slices to avoid URL length limits in PostgREST
+  const CHUNK = 50;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allRows: any[] = [];
+  for (let i = 0; i < centerIds.length; i += CHUNK) {
+    const { data, error } = await supabase
+      .from(TABLES.leads)
+      .select("*")
+      .in("center_id", centerIds.slice(i, i + CHUNK))
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(`DB error in getLeadsByBatch (leads): ${error.message}`);
+    if (data) allRows.push(...data);
+  }
 
-  if (error) throw new Error(`getLeadsByBatch (leads): ${error.message}`);
-
-  return (data ?? []).map((row) => ({
+  return allRows.map((row) => ({
     centerName: row.center_name ?? "",
     website: row.website ?? "",
     sourcePage: row.source_page ?? "",
@@ -206,16 +235,16 @@ export async function getSkippedCentersByBatch(
     .eq("status", "skipped")
     .order("created_at", { ascending: true });
 
-  if (error) throw new Error(`getSkippedCentersByBatch: ${error.message}`);
+  if (error) throw new Error(`DB error in getSkippedCentersByBatch: ${error.message}`);
 
   return (data ?? []).map((row) => ({
     name: row.name ?? "",
     skipReason: row.skip_reason ?? "",
+    sourcePage: row.source_page ?? "",
   }));
 }
 
 // ── 7. getBatchStats ──────────────────────────────────────────────────────────
-// Reads live counts from the centers table (not the batches cache row).
 
 export async function getBatchStats(batchId: string): Promise<BatchStats> {
   const [totalRes, enrichedRes, notFoundRes, skippedRes, batchRes] =
@@ -246,6 +275,8 @@ export async function getBatchStats(batchId: string): Promise<BatchStats> {
         .maybeSingle(),
     ]);
 
+  if (totalRes.error) throw new Error(`DB error in getBatchStats (total): ${totalRes.error.message}`);
+
   return {
     total: totalRes.count ?? 0,
     enriched: enrichedRes.count ?? 0,
@@ -268,11 +299,10 @@ export async function updateBatchStats(
       not_found: stats.notFound,
       skipped: stats.skipped,
       discarded: stats.discarded,
-      updated_at: new Date().toISOString(),
     })
     .eq("id", batchId);
 
-  if (error) throw new Error(`updateBatchStats: ${error.message}`);
+  if (error) throw new Error(`DB error in updateBatchStats: ${error.message}`);
 }
 
 // ── 9. getAllBatches ──────────────────────────────────────────────────────────
@@ -280,10 +310,11 @@ export async function updateBatchStats(
 export async function getAllBatches(): Promise<BatchSummary[]> {
   const { data, error } = await supabase
     .from(TABLES.batches)
-    .select("*")
-    .order("created_at", { ascending: false });
+    .select("*", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .limit(1000);
 
-  if (error) throw new Error(`getAllBatches: ${error.message}`);
+  if (error) throw new Error(`DB error in getAllBatches: ${error.message}`);
 
   return (data ?? []).map((row) => ({
     id: row.id,
@@ -299,47 +330,42 @@ export async function getAllBatches(): Promise<BatchSummary[]> {
 }
 
 // ── 10. deleteBatch ───────────────────────────────────────────────────────────
-// Delete order: leads → centers → batch (no FK cascade in schema).
 
 export async function deleteBatch(batchId: string): Promise<void> {
-  // Step 1: get center IDs for this batch
   const { data: centers, error: centersErr } = await supabase
     .from(TABLES.centers)
     .select("id")
     .eq("batch_id", batchId);
 
-  if (centersErr) throw new Error(`deleteBatch (fetch centers): ${centersErr.message}`);
+  if (centersErr) throw new Error(`DB error in deleteBatch (fetch centers): ${centersErr.message}`);
 
   const centerIds = (centers ?? []).map((c: { id: string }) => c.id);
 
-  // Step 2: delete leads linked to those centers
   if (centerIds.length > 0) {
     const { error: leadsErr } = await supabase
       .from(TABLES.leads)
       .delete()
       .in("center_id", centerIds);
 
-    if (leadsErr) throw new Error(`deleteBatch (delete leads): ${leadsErr.message}`);
+    if (leadsErr) throw new Error(`DB error in deleteBatch (delete leads): ${leadsErr.message}`);
   }
 
-  // Step 3: delete centers
   const { error: centersDelErr } = await supabase
     .from(TABLES.centers)
     .delete()
     .eq("batch_id", batchId);
 
-  if (centersDelErr) throw new Error(`deleteBatch (delete centers): ${centersDelErr.message}`);
+  if (centersDelErr) throw new Error(`DB error in deleteBatch (delete centers): ${centersDelErr.message}`);
 
-  // Step 4: delete the batch row
   const { error: batchErr } = await supabase
     .from(TABLES.batches)
     .delete()
     .eq("id", batchId);
 
-  if (batchErr) throw new Error(`deleteBatch (delete batch): ${batchErr.message}`);
+  if (batchErr) throw new Error(`DB error in deleteBatch (delete batch): ${batchErr.message}`);
 }
 
-// ── getBatchById ──────────────────────────────────────────────────────────────
+// ── 11. getBatchById ──────────────────────────────────────────────────────────
 
 export async function getBatchById(batchId: string): Promise<BatchSummary | null> {
   const { data, error } = await supabase
@@ -348,7 +374,7 @@ export async function getBatchById(batchId: string): Promise<BatchSummary | null
     .eq("id", batchId)
     .maybeSingle();
 
-  if (error) throw new Error(`getBatchById: ${error.message}`);
+  if (error) throw new Error(`DB error in getBatchById: ${error.message}`);
   if (!data) return null;
 
   return {
@@ -373,8 +399,8 @@ export async function getPendingCentersByBatch(batchId: string): Promise<Center[
     .eq("batch_id", batchId)
     .eq("status", "pending");
 
-  if (error) throw new Error(`getPendingCentersByBatch: ${error.message}`);
-  return (data ?? []) as Center[];
+  if (error) throw new Error(`DB error in getPendingCentersByBatch: ${error.message}`);
+  return (data ?? []).map((row) => mapCenter(row as DbCenterRow));
 }
 
 export async function getSkippedCount(batchId: string): Promise<number> {
@@ -384,6 +410,6 @@ export async function getSkippedCount(batchId: string): Promise<number> {
     .eq("batch_id", batchId)
     .eq("status", "skipped");
 
-  if (error) throw new Error(`getSkippedCount: ${error.message}`);
+  if (error) throw new Error(`DB error in getSkippedCount: ${error.message}`);
   return count ?? 0;
 }
