@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Toaster } from "sonner";
 import { SidebarNav } from "@/components/SidebarNav";
+import { validateEnv } from "@/lib/validateEnv";
 import "./globals.css";
+
+validateEnv();
 
 const inter = Inter({
   subsets: ["latin"],
