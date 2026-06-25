@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { LayoutDashboard, PlusCircle, Settings } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { LayoutDashboard, PlusCircle, Settings, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Dashboard",  href: "/"            },
@@ -11,8 +12,20 @@ const navItems = [
   { icon: Settings,        label: "Settings",   href: "/settings"    },
 ];
 
-export function SidebarNav() {
+interface SidebarNavProps {
+  userEmail?: string | null;
+}
+
+export function SidebarNav({ userEmail }: SidebarNavProps) {
   const pathname = usePathname();
+  const router = useRouter();
+
+  async function handleSignOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  }
 
   return (
     <aside className="fixed top-0 left-0 h-screen bg-navy flex flex-col z-30 w-16 xl:w-60 transition-all duration-200">
@@ -51,9 +64,20 @@ export function SidebarNav() {
         })}
       </nav>
 
-      {/* Version */}
-      <div className="hidden xl:block px-4 py-3 border-t border-white/10">
-        <p className="text-white/40 text-xs">v0.0.1</p>
+      {/* User + sign out */}
+      <div className="px-2 py-3 border-t border-white/10">
+        {userEmail && (
+          <p className="hidden xl:block text-white/40 text-xs px-3 pb-2 truncate">{userEmail}</p>
+        )}
+        <button
+          onClick={handleSignOut}
+          title="Sign out"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-white/80 hover:text-white hover:bg-white/10 xl:justify-start justify-center w-full"
+        >
+          <LogOut size={18} className="flex-shrink-0" />
+          <span className="hidden xl:block">Sign out</span>
+        </button>
+        <p className="hidden xl:block text-white/40 text-xs px-3 pt-2">v0.0.1</p>
       </div>
     </aside>
   );
