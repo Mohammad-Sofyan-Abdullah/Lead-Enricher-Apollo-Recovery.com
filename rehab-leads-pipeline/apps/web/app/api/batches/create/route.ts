@@ -2,11 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import { parseRawInput, cleanCenters } from "@rehab-leads/cleaner";
 import { saveBatch, saveCenters } from "@/lib/db";
+import type { RawCenter } from "@pipeline/types";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { label, rawText } = body as { label?: string; rawText?: string };
+    const { label, rawText, centers: rawCenters } = body as {
+      label?: string;
+      rawText?: string;
+      centers?: RawCenter[];
+    };
 
     if (!label?.trim()) {
       return NextResponse.json(
@@ -14,15 +19,21 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    if (!rawText?.trim()) {
+
+    let parsed: RawCenter[];
+
+    if (Array.isArray(rawCenters) && rawCenters.length > 0) {
+      parsed = rawCenters;
+    } else if (rawText?.trim()) {
+      parsed = parseRawInput(rawText);
+    } else {
       return NextResponse.json(
-        { error: "Validation error", detail: "rawText is required" },
+        { error: "Validation error", detail: "centers or rawText is required" },
         { status: 400 }
       );
     }
 
-    const rawCenters = parseRawInput(rawText);
-    const centers = cleanCenters(rawCenters);
+    const centers = cleanCenters(parsed);
 
     const batchId = nanoid();
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchByDomains, searchByName, enrichBulk } from "@rehab-leads/apollo";
-import type { SearchResult } from "@rehab-leads/apollo";
-import type { Center } from "@/lib/supabase";
+import type { SearchResult } from "@pipeline/types";
+import type { Center } from "@pipeline/types";
 import {
   getPendingCentersByBatch,
   saveLead,
@@ -35,8 +35,8 @@ export async function POST(
     }
 
     // 2. Split into domain-search vs name-search centers
-    const domainCenters = pendingCenters.filter((c) => !c.no_website && c.domain);
-    const nameCenters = pendingCenters.filter((c) => c.no_website);
+    const domainCenters = pendingCenters.filter((c) => !c.noWebsite && c.domain);
+    const nameCenters = pendingCenters.filter((c) => c.noWebsite);
 
     // 3. Build apolloId → Center[] mapping during the search phase
     //    so enriched leads can be matched back to their source centers.
@@ -66,7 +66,7 @@ export async function POST(
       const existing = apolloIdToCenters.get(result.apolloId) ?? [];
       apolloIdToCenters.set(result.apolloId, [...existing, center]);
 
-      // Guard against duplicate SearchResult entries (same person found via different paths)
+      // Guard against duplicate SearchResult entries
       if (!allSearchResults.some((r) => r.apolloId === result.apolloId)) {
         allSearchResults.push(result);
       }
@@ -99,7 +99,7 @@ export async function POST(
           centerId: center.id,
           centerName: center.name,
           website: center.website ?? "",
-          sourcePage: center.source_page ?? "",
+          sourcePage: center.sourcePage ?? "",
           fullName: lead.fullName,
           email: lead.email,
           emailStatus: lead.emailStatus,

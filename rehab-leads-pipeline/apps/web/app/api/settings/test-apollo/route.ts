@@ -8,14 +8,19 @@ export async function POST() {
   }
 
   try {
-    const res = await fetch("https://api.apollo.io/v1/mixed_people/search", {
+    const res = await fetch("https://api.apollo.io/api/v1/mixed_people/api_search", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "accept": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
       body: JSON.stringify({
-        api_key: apiKey,
+        person_titles: ["ceo"],
+        person_locations: ["United States"],
         per_page: 1,
         page: 1,
-        q_organization_domains_list: ["test.com"],
       }),
     });
 
@@ -26,11 +31,11 @@ export async function POST() {
     if (!res.ok) {
       return NextResponse.json({
         success: false,
-        error: `Apollo API returned HTTP ${res.status}`,
+        error: `Apollo unreachable: HTTP ${res.status}`,
       });
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, message: "Apollo API key is valid" });
   } catch (err) {
     return NextResponse.json({
       success: false,
