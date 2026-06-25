@@ -6,10 +6,13 @@
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter web build",
     "lint": "pnpm --filter web lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed": "tsx scripts/seed.ts",
+    "seed:clean": "tsx scripts/seed.ts --clean"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "tsx": "^4.15.0",
     "typescript": "^5.4.5"
   },
   "dependencies": {

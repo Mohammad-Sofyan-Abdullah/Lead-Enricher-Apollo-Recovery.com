@@ -7,9 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@pipeline/types": "workspace:*",
     "@radix-ui/react-dialog": "^1.1.1",
     "@rehab-leads/apollo": "workspace:*",
     "@rehab-leads/cleaner": "workspace:*",
@@ -18,13 +21,16 @@
     "lucide-react": "^0.395.0",
     "nanoid": "^3.3.7",
     "next": "14.2.4",
+    "papaparse": "^5.4.1",
     "react": "^18.3.1",
+    "xlsx": "^0.18.5",
     "react-dom": "^18.3.1",
     "sonner": "^1.5.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/papaparse": "^5.3.14",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.19",
@@ -32,6 +38,7 @@
     "eslint-config-next": "14.2.4",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
   }
 }

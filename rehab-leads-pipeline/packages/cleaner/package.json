@@ -17,8 +17,13 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "@pipeline/types": "workspace:*",
+    "papaparse": "^5.4.1"
+  },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/papaparse": "^5.3.14",
     "typescript": "^5.4.5",
     "vitest": "^1.6.0"
   }
