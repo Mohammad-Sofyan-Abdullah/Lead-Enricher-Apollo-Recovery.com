@@ -12,6 +12,7 @@ interface DownloadButtonProps {
   label: string;
   variant?: "default" | "ghost";
   className?: string;
+  iconOnly?: boolean;
 }
 
 export function DownloadButton({
@@ -20,6 +21,7 @@ export function DownloadButton({
   label,
   variant = "default",
   className,
+  iconOnly = false,
 }: DownloadButtonProps) {
   const [loading, setLoading] = useState(false);
 
@@ -35,18 +37,37 @@ export function DownloadButton({
     }
   };
 
-  const base =
-    "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-60";
   const variants = {
     default: "bg-gray-100 text-gray-700 hover:bg-gray-200",
     ghost:   "text-gray-600 hover:bg-gray-100",
   };
 
+  if (iconOnly) {
+    return (
+      <button
+        onClick={handleClick}
+        disabled={loading}
+        className={cn(
+          "inline-flex items-center justify-center rounded-lg p-1.5 transition-colors disabled:opacity-60",
+          variants[variant],
+          className
+        )}
+        title={`Download ${format.toUpperCase()}`}
+      >
+        {loading ? <span className="text-xs">…</span> : <Download size={13} />}
+      </button>
+    );
+  }
+
   return (
     <button
       onClick={handleClick}
       disabled={loading}
-      className={cn(base, variants[variant], className)}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-60",
+        variants[variant],
+        className
+      )}
       title={`Download ${format.toUpperCase()}`}
     >
       <Download size={13} />
