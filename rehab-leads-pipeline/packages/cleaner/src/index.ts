@@ -1,3 +1,8 @@
+import Papa from "papaparse";
+import type { RawCenter, CleanedCenter } from "@pipeline/types";
+
+export type { RawCenter, CleanedCenter } from "@pipeline/types";
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const LISTING_DOMAINS = new Set([
@@ -31,27 +36,6 @@ const KNOWN_INTL_DOMAINS = new Set([
   "edgewoodhealthnetwork.com",
   "nepalrehabcenter.com",
 ]);
-
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-export interface RawCenter {
-  name: string;
-  website: string;
-  sourcePage: string;
-}
-
-export interface CleanedCenter {
-  name: string;
-  cleanUrl: string;
-  sourcePage: string;
-  rawUrl: string;
-  domain: string;
-  status: "valid" | "skipped";
-  skipReason?: string;
-  noWebsite: boolean;
-  sourceMethod: "domain_search" | "name_search";
-  note?: string;
-}
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
@@ -153,73 +137,91 @@ function noWebsiteResult(
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
+/**
+ * Cleans raw centers. Never throws — any unhandled error produces a skipped entry.
+ */
 export function cleanCenters(raw: RawCenter[]): CleanedCenter[] {
   const seenDomains = new Map<string, string>(); // domain → first center name
 
   return raw.map((row) => {
-    const name = (row.name ?? "").trim();
-    const website = (row.website ?? "").trim();
-    const sourcePage = (row.sourcePage ?? "").trim();
+    try {
+      const name = (row.name ?? "").trim();
+      const website = (row.website ?? "").trim();
+      const sourcePage = (row.sourcePage ?? "").trim();
 
-    // ── Step 1: empty / placeholder / listing URL ─────────────────────────────
-    if (EMPTY_VALUES.has(website.toLowerCase()) || isListingUrl(website)) {
-      return noWebsiteResult(name, website, sourcePage);
-    }
+      // ── Step 1: empty / placeholder / listing URL ─────────────────────────────
+      if (EMPTY_VALUES.has(website.toLowerCase()) || isListingUrl(website)) {
+        return noWebsiteResult(name, website, sourcePage);
+      }
 
-    // ── Step 2: strip tracking params ────────────────────────────────────────
-    const cleanUrl = stripTrackingParams(website);
+      // ── Step 2: strip tracking params ────────────────────────────────────────
+      const cleanUrl = stripTrackingParams(website);
 
-    // ── Step 3: extract root domain ───────────────────────────────────────────
-    const { domain, error } = extractRootDomain(cleanUrl);
-    if (error) {
-      return {
-        name,
-        cleanUrl,
-        sourcePage,
-        rawUrl: website,
-        domain: "",
-        status: "skipped",
-        skipReason: "invalid_url",
-        noWebsite: true,
-        sourceMethod: "name_search",
-      };
-    }
+      // ── Step 3: extract root domain ───────────────────────────────────────────
+      const { domain, error } = extractRootDomain(cleanUrl);
+      if (error) {
+        return {
+          name,
+          cleanUrl,
+          sourcePage,
+          rawUrl: website,
+          domain: "",
+          status: "skipped" as const,
+          skipReason: "invalid_url",
+          noWebsite: true,
+          sourceMethod: "name_search" as const,
+        };
+      }
 
-    // ── Step 4: skip rules ────────────────────────────────────────────────────
-    const skipReason = getSkipReason(domain);
-    if (skipReason) {
+      // ── Step 4: skip rules ────────────────────────────────────────────────────
+      const skipReason = getSkipReason(domain);
+      if (skipReason) {
+        return {
+          name,
+          cleanUrl,
+          sourcePage,
+          rawUrl: website,
+          domain,
+          status: "skipped" as const,
+          skipReason,
+          noWebsite: false,
+          sourceMethod: "domain_search" as const,
+        };
+      }
+
+      // ── Step 5: same-domain note ──────────────────────────────────────────────
+      let note: string | undefined;
+      if (seenDomains.has(domain)) {
+        note = `SAME_DOMAIN as '${seenDomains.get(domain)}'`;
+      } else {
+        seenDomains.set(domain, name);
+      }
+
       return {
         name,
         cleanUrl,
         sourcePage,
         rawUrl: website,
         domain,
-        status: "skipped",
-        skipReason,
+        status: "valid" as const,
         noWebsite: false,
-        sourceMethod: "domain_search",
+        sourceMethod: "domain_search" as const,
+        ...(note !== undefined ? { note } : {}),
+      };
+    } catch (err) {
+      console.error(`cleanCenters error for "${row.name ?? ""}": ${err instanceof Error ? err.message : String(err)}`);
+      return {
+        name: row.name ?? "",
+        cleanUrl: "",
+        sourcePage: row.sourcePage ?? "",
+        rawUrl: row.website ?? "",
+        domain: "",
+        status: "skipped" as const,
+        skipReason: "internal_error",
+        noWebsite: true,
+        sourceMethod: "name_search" as const,
       };
     }
-
-    // ── Step 5: same-domain note ──────────────────────────────────────────────
-    let note: string | undefined;
-    if (seenDomains.has(domain)) {
-      note = `SAME_DOMAIN as '${seenDomains.get(domain)}'`;
-    } else {
-      seenDomains.set(domain, name);
-    }
-
-    return {
-      name,
-      cleanUrl,
-      sourcePage,
-      rawUrl: website,
-      domain,
-      status: "valid",
-      noWebsite: false,
-      sourceMethod: "domain_search",
-      ...(note !== undefined ? { note } : {}),
-    };
   });
 }
 
@@ -251,6 +253,7 @@ export function getNameSearchCenters(centers: CleanedCenter[]): CleanedCenter[] 
  * Columns: Center Name [TAB] Website URL [TAB] Source Page URL
  * Automatically discards a header row if the first non-empty line
  * contains "center name" or "website" (case-insensitive).
+ * Never throws — malformed lines are skipped with a console.warn.
  */
 export function parseRawInput(text: string): RawCenter[] {
   const lines = text.split("\n");
@@ -277,8 +280,85 @@ export function parseRawInput(text: string): RawCenter[] {
       results.push({ name: cols[0], website: cols[1], sourcePage: "" });
     } else if (cols.length === 1 && cols[0]) {
       results.push({ name: cols[0], website: "", sourcePage: "" });
+    } else {
+      console.warn(`Skipped malformed line: ${trimmed}`);
     }
   }
 
   return results;
+}
+
+// ── CSV column aliases ─────────────────────────────────────────────────────────
+
+const NAME_ALIASES = new Set([
+  "center name", "name", "center_name", "centername",
+]);
+
+const WEBSITE_ALIASES = new Set([
+  "website url", "website", "url", "website_url", "websiteurl",
+]);
+
+const SOURCE_ALIASES = new Set([
+  "source page", "source", "source_page", "sourcepage",
+  "source_url", "sourceurl",
+]);
+
+function findKey(fields: string[], aliases: Set<string>): string | undefined {
+  return fields.find((f) => aliases.has(f.toLowerCase()));
+}
+
+/**
+ * Parses a CSV file string (comma-separated, with header row) into RawCenter[].
+ * Column names are matched case-insensitively against known aliases.
+ * Throws if the Center Name column cannot be found.
+ * Never throws for missing Website or Source Page — those default to "".
+ */
+export function parseCSVInput(csvText: string): RawCenter[] {
+  const result = Papa.parse<Record<string, string>>(csvText, {
+    header: true,
+    skipEmptyLines: true,
+    transformHeader: (h) => h.trim(),
+  });
+
+  const fields: string[] = result.meta.fields ?? [];
+
+  const nameKey = findKey(fields, NAME_ALIASES);
+  if (!nameKey) {
+    throw new Error("CSV must have a Center Name column");
+  }
+
+  const websiteKey = findKey(fields, WEBSITE_ALIASES);
+  const sourceKey = findKey(fields, SOURCE_ALIASES);
+
+  return result.data
+    .filter((row) => (row[nameKey] ?? "").trim() !== "")
+    .map((row) => ({
+      name: (row[nameKey] ?? "").trim(),
+      website: websiteKey ? (row[websiteKey] ?? "").trim() : "",
+      sourcePage: sourceKey ? (row[sourceKey] ?? "").trim() : "",
+    }));
+}
+
+/**
+ * Detects whether the pasted/uploaded text looks like TSV or CSV.
+ * Used by the UI to auto-select the right parser.
+ */
+export function detectInputFormat(text: string): "csv" | "tsv" | "unknown" {
+  if (text.includes("\t")) return "tsv";
+
+  const firstLine = text.split(/\r?\n/)[0] ?? "";
+  if (firstLine.includes(",")) {
+    const lower = firstLine.toLowerCase();
+    if (
+      lower.includes("center") ||
+      lower.includes("name") ||
+      lower.includes("website") ||
+      lower.includes("url") ||
+      lower.includes("source")
+    ) {
+      return "csv";
+    }
+  }
+
+  return "unknown";
 }
