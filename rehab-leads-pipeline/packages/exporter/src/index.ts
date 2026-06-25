@@ -1,27 +1,10 @@
 import Papa from "papaparse";
 import ExcelJS from "exceljs";
 import { format as dateFmt } from "date-fns";
+import type { OutputLead, SkippedCenter } from "@pipeline/types";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-export interface OutputLead {
-  centerName: string;
-  website: string;
-  sourcePage: string;
-  name: string;
-  email: string;
-  linkedinUrl: string;
-  title: string;
-  org: string;
-  country: string;
-  sourceMethod: "domain_search" | "name_search";
-  emailStatus: string;
-}
-
-export interface SkippedCenter {
-  name: string;
-  skipReason: string;
-}
+// Re-export for backward compatibility
+export type { OutputLead, SkippedCenter };
 
 // ── Internal constants ─────────────────────────────────────────────────────────
 
@@ -85,118 +68,124 @@ function getSkipCategory(reason: string): string {
 // ── 1. exportCSV ───────────────────────────────────────────────────────────────
 
 export function exportCSV(leads: OutputLead[]): string {
-  const filtered = leads.filter((l) => l.name.trim() !== "");
+  try {
+    const filtered = leads.filter((l) => l.name.trim() !== "");
 
-  // Always emit the header row, even when there is no data
-  if (filtered.length === 0) {
+    if (filtered.length === 0) {
+      return [...CSV_HEADERS].join(",") + "\n";
+    }
+
+    const rows = filtered.map((l) => ({
+      Center_Name:   l.centerName,
+      Website:       l.website,
+      Source_Page:   l.sourcePage,
+      Name:          l.name,
+      Email:         l.email,
+      LinkedIn_URL:  l.linkedinUrl,
+      Title:         l.title,
+      Organization:  l.org,
+      Email_Status:  l.emailStatus,
+      Source_Method: l.sourceMethod,
+      Country:       l.country,
+    }));
+
+    return Papa.unparse(rows, {
+      header: true,
+      columns: [...CSV_HEADERS],
+      newline: "\n",
+    });
+  } catch (err) {
+    console.error(`exportCSV error: ${err instanceof Error ? err.message : String(err)}`);
     return [...CSV_HEADERS].join(",") + "\n";
   }
-
-  const rows = filtered.map((l) => ({
-    Center_Name:  l.centerName,
-    Website:      l.website,
-    Source_Page:  l.sourcePage,
-    Name:         l.name,
-    Email:        l.email,        // empty string kept as-is — never "null"
-    LinkedIn_URL: l.linkedinUrl,
-    Title:        l.title,
-    Organization: l.org,
-    Email_Status: l.emailStatus,
-    Source_Method:l.sourceMethod,
-    Country:      l.country,
-  }));
-
-  return Papa.unparse(rows, {
-    header: true,
-    columns: [...CSV_HEADERS],
-    newline: "\n",
-  });
 }
 
 // ── 2. exportXLSX ──────────────────────────────────────────────────────────────
 
 export async function exportXLSX(leads: OutputLead[]): Promise<Buffer> {
-  const filtered = leads.filter((l) => l.name.trim() !== "");
+  try {
+    const filtered = leads.filter((l) => l.name.trim() !== "");
 
-  const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet("Leads");
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Leads");
 
-  worksheet.columns = XLSX_COLUMNS.map((c) => ({
-    header: c.header,
-    key: c.key,
-    width: 15, // recalculated below
-  }));
+    worksheet.columns = XLSX_COLUMNS.map((c) => ({
+      header: c.header,
+      key: c.key,
+      width: 15,
+    }));
 
-  // Header row: bold, dark navy bg, white text
-  const headerRow = worksheet.getRow(1);
-  headerRow.height = 22;
-  headerRow.eachCell((cell) => {
-    cell.font      = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-    cell.fill      = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E3A5F" } };
-    cell.alignment = { vertical: "middle", horizontal: "left" };
-  });
-
-  // Freeze header row
-  worksheet.views = [{ state: "frozen", ySplit: 1 }];
-
-  // Data rows
-  filtered.forEach((lead, idx) => {
-    const rowNum = idx + 2;
-    const isEven = rowNum % 2 === 0;
-
-    const emailDisplay     = lead.emailStatus === "verified" ? `● ${lead.email}` : lead.email;
-    const sourceDisplay    = lead.sourceMethod === "domain_search" ? "Domain Search" : "Name Search";
-
-    const row = worksheet.addRow({
-      centerName:   lead.centerName,
-      website:      lead.website,
-      sourcePage:   lead.sourcePage,
-      name:         lead.name,
-      email:        emailDisplay,
-      linkedinUrl:  lead.linkedinUrl,
-      title:        lead.title,
-      organization: lead.org,
-      emailStatus:  lead.emailStatus,
-      sourceMethod: sourceDisplay,
-      country:      lead.country,
+    // Header row: bold, dark navy bg, white text
+    const headerRow = worksheet.getRow(1);
+    headerRow.height = 22;
+    headerRow.eachCell((cell) => {
+      cell.font      = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+      cell.fill      = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E3A5F" } };
+      cell.alignment = { vertical: "middle", horizontal: "left" };
     });
 
-    // Alternate row fill (applied before hyperlink so font override doesn't clear bg)
-    if (isEven) {
-      row.eachCell({ includeEmpty: true }, (cell) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF4F6F9" } };
+    // Freeze header row
+    worksheet.views = [{ state: "frozen", ySplit: 1 }];
+
+    // Data rows
+    filtered.forEach((lead, idx) => {
+      const rowNum = idx + 2;
+      const isEven = rowNum % 2 === 0;
+
+      const emailDisplay  = lead.emailStatus === "verified" ? `● ${lead.email}` : lead.email;
+      const sourceDisplay = lead.sourceMethod === "domain_search" ? "Domain Search" : "Name Search";
+
+      const row = worksheet.addRow({
+        centerName:   lead.centerName,
+        website:      lead.website,
+        sourcePage:   lead.sourcePage,
+        name:         lead.name,
+        email:        emailDisplay,
+        linkedinUrl:  lead.linkedinUrl,
+        title:        lead.title,
+        organization: lead.org,
+        emailStatus:  lead.emailStatus,
+        sourceMethod: sourceDisplay,
+        country:      lead.country,
       });
-    }
 
-    // LinkedIn hyperlink
-    if (lead.linkedinUrl) {
-      const cell = row.getCell("linkedinUrl");
-      cell.value = { text: lead.linkedinUrl, hyperlink: lead.linkedinUrl };
-      cell.font  = { color: { argb: "FF0563C1" }, underline: true };
-    }
-  });
-
-  // Auto-fit column widths: measure every cell, clamp to [15, 60]
-  worksheet.columns.forEach((col) => {
-    if (!col || !col.eachCell) return;
-    let maxLen = (col.header?.toString() ?? "").length;
-    col.eachCell({ includeEmpty: true }, (cell) => {
-      const v = cell.value;
-      let len = 0;
-      if (typeof v === "string") {
-        len = v.length;
-      } else if (v !== null && typeof v === "object" && "text" in (v as object)) {
-        len = ((v as { text: string }).text ?? "").length;
-      } else if (v != null) {
-        len = String(v).length;
+      if (isEven) {
+        row.eachCell({ includeEmpty: true }, (cell) => {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF4F6F9" } };
+        });
       }
-      if (len > maxLen) maxLen = len;
-    });
-    col.width = Math.min(Math.max(maxLen + 2, 15), 60);
-  });
 
-  const buf = await workbook.xlsx.writeBuffer();
-  return Buffer.isBuffer(buf) ? buf : Buffer.from(buf as ArrayBuffer);
+      if (lead.linkedinUrl) {
+        const cell = row.getCell("linkedinUrl");
+        cell.value = { text: lead.linkedinUrl, hyperlink: lead.linkedinUrl };
+        cell.font  = { color: { argb: "FF0563C1" }, underline: true };
+      }
+    });
+
+    // Auto-fit column widths: measure every cell, clamp to [15, 60]
+    worksheet.columns.forEach((col) => {
+      if (!col || !col.eachCell) return;
+      let maxLen = (col.header?.toString() ?? "").length;
+      col.eachCell({ includeEmpty: true }, (cell) => {
+        const v = cell.value;
+        let len = 0;
+        if (typeof v === "string") {
+          len = v.length;
+        } else if (v !== null && typeof v === "object" && "text" in (v as object)) {
+          len = ((v as { text: string }).text ?? "").length;
+        } else if (v != null) {
+          len = String(v).length;
+        }
+        if (len > maxLen) maxLen = len;
+      });
+      col.width = Math.min(Math.max(maxLen + 2, 15), 60);
+    });
+
+    const buf = await workbook.xlsx.writeBuffer();
+    return Buffer.isBuffer(buf) ? buf : Buffer.from(buf as ArrayBuffer);
+  } catch (err) {
+    throw new Error(`exportXLSX failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 // ── 3. exportSummary ───────────────────────────────────────────────────────────
@@ -212,8 +201,8 @@ export function exportSummary(
 
   const SEP   = "=".repeat(40);
   const DASH  = "-".repeat(40);
-  const SW    = 26; // stat label column width
-  const SKW   = 34; // skip label column width (includes 2-space indent)
+  const SW    = 26;
+  const SKW   = 34;
 
   const skipCounts = new Map<string, number>();
   for (const c of skippedCenters) {
