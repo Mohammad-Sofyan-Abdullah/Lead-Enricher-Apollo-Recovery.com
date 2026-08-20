@@ -261,13 +261,28 @@ export async function saveLeadsBulk(
 // Two-step: get center IDs for batch → get leads for those centers.
 
 export async function getLeadsByBatch(batchId: string): Promise<OutputLead[]> {
-  const { data: centerRows, error: centerErr } = await supabase
-    .from(TABLES.centers)
-    .select("id")
-    .eq("batch_id", batchId);
+  // PostgREST caps how many rows one request returns, so a batch larger than that
+  // cap would silently contribute only its first page of centers here — and every
+  // lead belonging to the centers past it would vanish from listings and exports.
+  // Page explicitly rather than trusting a single unbounded select.
+  const PAGE = 1000;
+  const centerIds: string[] = [];
 
-  if (centerErr) throw new Error(`DB error in getLeadsByBatch (centers): ${centerErr.message}`);
-  const centerIds = (centerRows ?? []).map((c: { id: string }) => c.id);
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from(TABLES.centers)
+      .select("id")
+      .eq("batch_id", batchId)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+
+    if (error) throw new Error(`DB error in getLeadsByBatch (centers): ${error.message}`);
+
+    const page = (data ?? []) as { id: string }[];
+    centerIds.push(...page.map((c) => c.id));
+    if (page.length < PAGE) break;
+  }
+
   if (!centerIds.length) return [];
 
   // Chunk into 50-ID slices to avoid URL length limits in PostgREST
