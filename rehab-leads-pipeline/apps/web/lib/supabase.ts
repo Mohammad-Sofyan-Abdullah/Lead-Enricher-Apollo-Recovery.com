@@ -15,6 +15,15 @@ export const supabase = createClient(supabaseUrl, supabaseServiceKey, {
     autoRefreshToken: false,
     persistSession: false,
   },
+  global: {
+    // supabase-js issues its queries as GET requests through fetch, and the
+    // Next.js App Router caches fetch by default, keyed on the URL. Queries
+    // whose URL never varies — getAllBatches being the obvious one — would
+    // otherwise be answered from a snapshot taken the first time they ran,
+    // so the dashboard silently stopped showing new or updated batches.
+    // Per-batch queries hid the problem because their URLs differ each time.
+    fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }),
+  },
 });
 
 // Table name constants — all tables use the leadenricher_ prefix
