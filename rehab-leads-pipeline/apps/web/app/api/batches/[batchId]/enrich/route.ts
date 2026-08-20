@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchByDomains, searchByName, enrichBulk } from "@rehab-leads/apollo";
-import type { SearchResult } from "@pipeline/types";
+import { searchByDomains, searchByNames, enrichBulk } from "@rehab-leads/apollo";
+import type { SearchResult, EnrichedLead } from "@pipeline/types";
 import type { Center } from "@pipeline/types";
 import {
   getPendingCentersByBatch,
-  saveLead,
-  updateCenterStatus,
+  saveLeadsBulk,
+  updateCenterStatuses,
   updateBatchStats,
   getSkippedCount,
 } from "@/lib/db";
@@ -22,6 +22,8 @@ export async function POST(
       { status: 400 }
     );
   }
+
+  const startedAt = Date.now();
 
   try {
     // 1. Load all pending centers for this batch
@@ -43,7 +45,7 @@ export async function POST(
     const apolloIdToCenters = new Map<string, Center[]>();
     const allSearchResults: SearchResult[] = [];
 
-    // Domain search — deduplicate domains, batch internally in searchByDomains
+    // Domain search — deduplicate domains, batched and run concurrently inside
     const uniqueDomains = [...new Set(
       domainCenters.map((c) => c.domain as string)
     )];
@@ -58,28 +60,31 @@ export async function POST(
       }
     }
 
-    // Name search — one request per center
-    for (const center of nameCenters) {
-      const result = await searchByName(center.name);
-      if (!result) continue;
+    // Name search — run concurrently, results align with nameCenters by index
+    if (nameCenters.length > 0) {
+      const nameResults = await searchByNames(nameCenters.map((c) => c.name));
 
-      const existing = apolloIdToCenters.get(result.apolloId) ?? [];
-      apolloIdToCenters.set(result.apolloId, [...existing, center]);
+      for (let i = 0; i < nameCenters.length; i++) {
+        const result = nameResults[i];
+        if (!result) continue;
 
-      // Guard against duplicate SearchResult entries
-      if (!allSearchResults.some((r) => r.apolloId === result.apolloId)) {
-        allSearchResults.push(result);
+        const existing = apolloIdToCenters.get(result.apolloId) ?? [];
+        apolloIdToCenters.set(result.apolloId, [...existing, nameCenters[i]]);
+
+        // Guard against duplicate SearchResult entries
+        if (!allSearchResults.some((r) => r.apolloId === result.apolloId)) {
+          allSearchResults.push(result);
+        }
       }
     }
 
     // 4. Enrich all search results (bulk_match, batched in 10s, US filter applied inside)
     const enrichedLeads = await enrichBulk(allSearchResults);
 
-    // 5. Process each enriched lead
-    const enrichedCenterIds = new Set<string>();
-    let enrichedCount = 0;
+    // 5. Flatten to (lead, center) pairs in the same order the sequential
+    //    version processed them, so "first apollo_id wins" dedup is unchanged.
+    const pairs: { lead: EnrichedLead; center: Center }[] = [];
     let discardedCount = 0;
-    let duplicateCount = 0;
 
     for (const lead of enrichedLeads) {
       // Safety net country check (enrichBulk also filters, but guard here for counts)
@@ -91,55 +96,66 @@ export async function POST(
         continue;
       }
 
-      const matchingCenters = apolloIdToCenters.get(lead.apolloId) ?? [];
-
-      for (const center of matchingCenters) {
-        const saveResult = await saveLead({
-          apolloId: lead.apolloId,
-          centerId: center.id,
-          centerName: center.name,
-          website: center.website ?? "",
-          sourcePage: center.sourcePage ?? "",
-          fullName: lead.fullName,
-          email: lead.email,
-          emailStatus: lead.emailStatus,
-          linkedinUrl: lead.linkedinUrl,
-          title: lead.title,
-          org: lead.org,
-          country: lead.country,
-          sourceMethod: lead.sourceMethod,
-        });
-
-        if (saveResult === "duplicate") {
-          duplicateCount++;
-          continue;
-        }
-
-        await updateCenterStatus(center.id, "enriched");
-        enrichedCenterIds.add(center.id);
-        enrichedCount++;
+      for (const center of apolloIdToCenters.get(lead.apolloId) ?? []) {
+        pairs.push({ lead, center });
       }
     }
 
-    // 6. Mark every pending center that got no lead as not_found
-    let notFoundCount = 0;
-    for (const center of pendingCenters) {
-      if (!enrichedCenterIds.has(center.id)) {
-        await updateCenterStatus(center.id, "not_found");
-        notFoundCount++;
+    // 6. Save every lead in one bulk pass, then flip statuses in one bulk update
+    const saveResults = await saveLeadsBulk(
+      pairs.map(({ lead, center }) => ({
+        apolloId: lead.apolloId,
+        centerId: center.id,
+        centerName: center.name,
+        website: center.website ?? "",
+        sourcePage: center.sourcePage ?? "",
+        fullName: lead.fullName,
+        email: lead.email,
+        emailStatus: lead.emailStatus,
+        linkedinUrl: lead.linkedinUrl,
+        title: lead.title,
+        org: lead.org,
+        country: lead.country,
+        sourceMethod: lead.sourceMethod,
+      }))
+    );
+
+    const enrichedCenterIds = new Set<string>();
+    let enrichedCount = 0;
+    let duplicateCount = 0;
+
+    for (let i = 0; i < pairs.length; i++) {
+      if (saveResults[i] === "duplicate") {
+        duplicateCount++;
+        continue;
       }
+      enrichedCenterIds.add(pairs[i].center.id);
+      enrichedCount++;
     }
 
-    // 7. Get skipped center count (saved as 'skipped' during batch creation)
+    await updateCenterStatuses([...enrichedCenterIds], "enriched");
+
+    // 7. Mark every pending center that got no lead as not_found
+    const notFoundIds = pendingCenters
+      .filter((c) => !enrichedCenterIds.has(c.id))
+      .map((c) => c.id);
+
+    await updateCenterStatuses(notFoundIds, "not_found");
+    const notFoundCount = notFoundIds.length;
+
+    // 8. Get skipped center count (saved as 'skipped' during batch creation)
     const skippedCount = await getSkippedCount(batchId);
 
-    // 8. Persist final stats to the batches row
+    // 9. Persist final stats to the batches row
     await updateBatchStats(batchId, {
       enriched: enrichedCount,
       notFound: notFoundCount,
       skipped: skippedCount,
       discarded: discardedCount,
     });
+
+    const elapsedMs = Date.now() - startedAt;
+    console.log(`[enrich:${batchId}] Completed in ${elapsedMs}ms`);
 
     return NextResponse.json({
       batchId,
@@ -148,6 +164,7 @@ export async function POST(
       skipped: skippedCount,
       discarded: discardedCount,
       duplicates: duplicateCount,
+      elapsedMs,
     });
   } catch (err) {
     console.error(`[POST /api/batches/${batchId}/enrich]`, err);

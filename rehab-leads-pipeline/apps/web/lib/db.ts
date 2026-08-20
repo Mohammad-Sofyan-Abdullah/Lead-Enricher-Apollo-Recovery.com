@@ -143,6 +143,28 @@ export async function updateCenterStatus(
   if (error) throw new Error(`DB error in updateCenterStatus: ${error.message}`);
 }
 
+// ── 3b. updateCenterStatuses (bulk) ───────────────────────────────────────────
+// Same effect as calling updateCenterStatus per id, in one round trip per chunk
+// instead of one per center.
+
+export async function updateCenterStatuses(
+  centerIds: string[],
+  status: CenterStatus,
+  skipReason?: string
+): Promise<void> {
+  if (!centerIds.length) return;
+
+  const CHUNK = 100;
+  for (let i = 0; i < centerIds.length; i += CHUNK) {
+    const { error } = await supabase
+      .from(TABLES.centers)
+      .update({ status, skip_reason: skipReason ?? null })
+      .in("id", centerIds.slice(i, i + CHUNK));
+
+    if (error) throw new Error(`DB error in updateCenterStatuses: ${error.message}`);
+  }
+}
+
 // ── 4. saveLead ───────────────────────────────────────────────────────────────
 // CRITICAL DEDUP RULE: check apollo_id first. If already exists, return
 // "duplicate" immediately — never update or re-insert the same person.
@@ -159,7 +181,14 @@ export async function saveLead(
   if (checkErr) throw new Error(`DB error in saveLead (check): ${checkErr.message}`);
   if (existing) return "duplicate";
 
-  const insertData = {
+  const { error } = await supabase.from(TABLES.leads).insert(toLeadRow(lead));
+
+  if (error) throw new Error(`DB error in saveLead (insert): ${error.message}`);
+  return "saved";
+}
+
+function toLeadRow(lead: SaveLeadInput) {
+  return {
     apollo_id: lead.apolloId,
     center_id: lead.centerId,
     center_name: lead.centerName,
@@ -174,11 +203,58 @@ export async function saveLead(
     source_method: lead.sourceMethod ?? "domain_search",
     ...(lead.sourcePage != null ? { source_page: lead.sourcePage } : {}),
   };
+}
 
-  const { error } = await supabase.from(TABLES.leads).insert(insertData);
+// ── 4b. saveLeadsBulk ─────────────────────────────────────────────────────────
+// Bulk equivalent of calling saveLead in a loop. Preserves the dedup rule
+// exactly: an apollo_id already in the table — or already claimed by an earlier
+// entry in this same call — is a "duplicate" and is never inserted or updated.
+// Results are returned in input order so callers can attribute them per center.
 
-  if (error) throw new Error(`DB error in saveLead (insert): ${error.message}`);
-  return "saved";
+export async function saveLeadsBulk(
+  leads: SaveLeadInput[]
+): Promise<("saved" | "duplicate")[]> {
+  if (!leads.length) return [];
+
+  const CHUNK = 50;
+  const uniqueIds = [...new Set(leads.map((l) => l.apolloId))];
+  const existingIds = new Set<string>();
+
+  for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+    const { data, error } = await supabase
+      .from(TABLES.leads)
+      .select("apollo_id")
+      .in("apollo_id", uniqueIds.slice(i, i + CHUNK));
+
+    if (error) throw new Error(`DB error in saveLeadsBulk (check): ${error.message}`);
+    for (const row of data ?? []) existingIds.add((row as { apollo_id: string }).apollo_id);
+  }
+
+  // Walk in order so "first one wins" matches the sequential behaviour.
+  const claimed = new Set<string>();
+  const results: ("saved" | "duplicate")[] = [];
+  const rows: ReturnType<typeof toLeadRow>[] = [];
+
+  for (const lead of leads) {
+    if (existingIds.has(lead.apolloId) || claimed.has(lead.apolloId)) {
+      results.push("duplicate");
+      continue;
+    }
+    claimed.add(lead.apolloId);
+    rows.push(toLeadRow(lead));
+    results.push("saved");
+  }
+
+  const INSERT_CHUNK = 100;
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+    const { error } = await supabase
+      .from(TABLES.leads)
+      .insert(rows.slice(i, i + INSERT_CHUNK));
+
+    if (error) throw new Error(`DB error in saveLeadsBulk (insert): ${error.message}`);
+  }
+
+  return results;
 }
 
 // ── 5. getLeadsByBatch ────────────────────────────────────────────────────────
