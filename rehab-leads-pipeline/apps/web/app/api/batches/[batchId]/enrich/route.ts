@@ -7,7 +7,7 @@ import {
   saveLeadsBulk,
   updateCenterStatuses,
   updateBatchStats,
-  getSkippedCount,
+  getBatchStats,
 } from "@/lib/db";
 
 export async function POST(
@@ -143,25 +143,29 @@ export async function POST(
     await updateCenterStatuses(notFoundIds, "not_found");
     const notFoundCount = notFoundIds.length;
 
-    // 8. Get skipped center count (saved as 'skipped' during batch creation)
-    const skippedCount = await getSkippedCount(batchId);
+    // 8. Persist cumulative totals to the batches row. enriched/notFound/skipped
+    //    are counted from the centers table rather than tallied from this run, so
+    //    re-running a partially processed batch tops the dashboard numbers up
+    //    instead of overwriting them with only the latest run's counts.
+    //    discarded has no center status to count from, so it accumulates.
+    const totals = await getBatchStats(batchId);
 
-    // 9. Persist final stats to the batches row
     await updateBatchStats(batchId, {
-      enriched: enrichedCount,
-      notFound: notFoundCount,
-      skipped: skippedCount,
-      discarded: discardedCount,
+      enriched: totals.enriched,
+      notFound: totals.notFound,
+      skipped: totals.skipped,
+      discarded: totals.discarded + discardedCount,
     });
 
     const elapsedMs = Date.now() - startedAt;
     console.log(`[enrich:${batchId}] Completed in ${elapsedMs}ms`);
 
+    // Response reports what *this* run did; the batches row above holds the totals.
     return NextResponse.json({
       batchId,
       enriched: enrichedCount,
       notFound: notFoundCount,
-      skipped: skippedCount,
+      skipped: totals.skipped,
       discarded: discardedCount,
       duplicates: duplicateCount,
       elapsedMs,
