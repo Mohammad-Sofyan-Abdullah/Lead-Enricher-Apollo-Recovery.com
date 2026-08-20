@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Loader2, Trash2, RefreshCw, ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DownloadButton } from "@/components/DownloadButton";
-import { formatDate, cn } from "@/lib/utils";
+import { formatDate, cn, ENRICH_CHUNK_SIZE } from "@/lib/utils";
 import { buildFilename } from "@rehab-leads/exporter";
 import type { BatchSummary } from "@/lib/db";
 
@@ -119,17 +119,57 @@ export function BatchesSection() {
 
   const handleEnrich = async (id: string) => {
     setEnriching((s) => new Set([...s, id]));
+
+    // Work through the batch a chunk at a time. Each request has to finish inside
+    // the gateway's ~30s ceiling, so a large batch takes several passes. Centers
+    // already handled are marked in the database, so every pass simply continues
+    // where the last one stopped.
+    let enriched = 0;
+    let notFound = 0;
+    let processed = 0;
+
     try {
-      const res = await fetch(`/api/batches/${id}/enrich`, { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) {
-        toast.error(json.detail ?? "Enrichment failed");
-        return;
+      while (true) {
+        const res = await fetch(
+          `/api/batches/${id}/enrich?limit=${ENRICH_CHUNK_SIZE}`,
+          { method: "POST" }
+        );
+        const json = await res.json();
+
+        if (!res.ok) {
+          // Anything already completed is saved; report it rather than losing it.
+          if (processed > 0) {
+            toast.error(
+              `${json.detail ?? "Enrichment failed"} — kept ${enriched} leads from ${processed} centers. Press Enrich again to resume.`
+            );
+          } else {
+            toast.error(json.detail ?? "Enrichment failed");
+          }
+          return;
+        }
+
+        enriched += json.enriched ?? 0;
+        notFound += json.notFound ?? 0;
+        processed += json.processed ?? 0;
+
+        if (json.done || !json.processed) break;
+
+        toast.loading(
+          `Enriching… ${processed} done, ${json.remaining} to go`,
+          { id: `enrich-${id}` }
+        );
       }
-      toast.success(`Enriched ${json.enriched} leads, ${json.notFound} not found`);
+
+      toast.dismiss(`enrich-${id}`);
+      toast.success(`Enriched ${enriched} leads, ${notFound} not found`);
       fetchBatches();
     } catch {
-      toast.error("Enrichment failed");
+      toast.dismiss(`enrich-${id}`);
+      toast.error(
+        processed > 0
+          ? `Enrichment interrupted — kept ${enriched} leads from ${processed} centers. Press Enrich again to resume.`
+          : "Enrichment failed"
+      );
     } finally {
       setEnriching((s) => { const n = new Set(s); n.delete(id); return n; });
     }

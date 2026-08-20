@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowLeft, Loader2, CheckCircle, XCircle } from "lucide-react";
 import Link from "next/link";
+import { ENRICH_CHUNK_SIZE } from "@/lib/utils";
 import { DownloadButton } from "@/components/DownloadButton";
 import { FileDropzone } from "@/components/FileDropzone";
 import { ColumnMapper } from "@/components/ColumnMapper";
@@ -292,13 +293,10 @@ export default function NewBatchPage() {
   const showXlsxMapper =
     !!xlsxParseResult && (!xlsxAllDetected || xlsxMapperExpanded);
 
-  // Fake progress bar during enrichment
+  // Progress is driven by handleEnrich from the work actually remaining, so it no
+  // longer needs the timer that used to fake it.
   useEffect(() => {
-    if (step !== "enriching") { setProgress(0); return; }
-    const id = setInterval(() => {
-      setProgress((p) => (p >= 90 ? 90 : p + Math.random() * 3 + 1));
-    }, 600);
-    return () => clearInterval(id);
+    if (step !== "enriching") setProgress(0);
   }, [step]);
 
   // ── CSV file handler ─────────────────────────────────────────────────────────
@@ -483,23 +481,68 @@ export default function NewBatchPage() {
   const handleEnrich = async () => {
     if (!createResult) return;
     setStep("enriching");
-    setProgress(5);
+    setProgress(0);
+
+    // Each request must finish inside the gateway's ~30s ceiling, so the batch is
+    // worked through a chunk at a time. Processed centers are recorded in the
+    // database, so every pass continues where the last one stopped — and an
+    // interrupted run keeps everything it already completed.
+    const totals: EnrichResult = {
+      batchId: createResult.batchId,
+      enriched: 0,
+      notFound: 0,
+      skipped: 0,
+      discarded: 0,
+      duplicates: 0,
+    };
+    let processed = 0;
+
     try {
-      const res = await fetch(`/api/batches/${createResult.batchId}/enrich`, {
-        method: "POST",
-      });
-      const json = await res.json();
-      setProgress(100);
-      if (!res.ok) {
-        setErrorMsg(json.detail ?? json.error ?? "Enrichment failed");
-        setStep("error");
-        return;
+      while (true) {
+        const res = await fetch(
+          `/api/batches/${createResult.batchId}/enrich?limit=${ENRICH_CHUNK_SIZE}`,
+          { method: "POST" }
+        );
+        const json = await res.json();
+
+        if (!res.ok) {
+          setErrorMsg(
+            processed > 0
+              ? `${json.detail ?? json.error ?? "Enrichment failed"} — ${totals.enriched} leads from ${processed} centers were saved. Try Again resumes from there.`
+              : json.detail ?? json.error ?? "Enrichment failed"
+          );
+          setStep("error");
+          return;
+        }
+
+        totals.enriched += json.enriched ?? 0;
+        totals.notFound += json.notFound ?? 0;
+        totals.discarded += json.discarded ?? 0;
+        totals.duplicates += json.duplicates ?? 0;
+        totals.skipped = json.skipped ?? totals.skipped;
+        processed += json.processed ?? 0;
+
+        // Real progress, measured against work actually remaining.
+        const remaining = json.remaining ?? 0;
+        setProgress(
+          processed + remaining > 0
+            ? Math.round((processed / (processed + remaining)) * 100)
+            : 100
+        );
+
+        // `!json.processed` guards against an empty pass so this can never spin.
+        if (json.done || !json.processed) break;
       }
-      setEnrichResult(json as EnrichResult);
+
+      setProgress(100);
+      setEnrichResult(totals);
       setStep("done");
     } catch (err) {
-      setProgress(0);
-      setErrorMsg(String(err));
+      setErrorMsg(
+        processed > 0
+          ? `${String(err)} — ${totals.enriched} leads from ${processed} centers were saved. Try Again resumes from there.`
+          : String(err)
+      );
       setStep("error");
     }
   };

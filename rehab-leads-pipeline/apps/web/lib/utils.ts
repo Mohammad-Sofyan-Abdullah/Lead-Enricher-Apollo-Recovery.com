@@ -1,3 +1,9 @@
+// How many centers one enrichment request takes on. The gateway drops any
+// response that goes quiet for ~30s, and measured throughput is ~70ms per
+// center, so 150 lands near 10s — roughly three times the headroom needed.
+// Larger batches are worked through by calling the endpoint repeatedly.
+export const ENRICH_CHUNK_SIZE = 150;
+
 export function cn(...classes: (string | undefined | false | null | 0)[]): string {
   return classes.filter(Boolean).join(" ");
 }

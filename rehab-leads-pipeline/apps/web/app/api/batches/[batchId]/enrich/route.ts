@@ -12,7 +12,7 @@ import {
 } from "@/lib/db";
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { batchId: string } }
 ) {
   const { batchId } = params;
@@ -24,11 +24,26 @@ export async function POST(
     );
   }
 
+  // Optional chunk size. Absent — the historical behaviour — means "every pending
+  // center in one pass", which is still right for batches small enough to finish
+  // inside the gateway's ~30s ceiling. Callers working through a large batch pass
+  // a limit and keep calling until `done`.
+  const limitParam = req.nextUrl.searchParams.get("limit");
+  const parsedLimit = limitParam == null ? null : Number(limitParam);
+
+  if (limitParam != null && (!Number.isInteger(parsedLimit) || parsedLimit! < 1)) {
+    return NextResponse.json(
+      { error: "Validation error", detail: "limit must be a positive integer" },
+      { status: 400 }
+    );
+  }
+
+  const limit = parsedLimit ?? undefined;
   const startedAt = Date.now();
 
   try {
-    // 1. Load all pending centers for this batch
-    const pendingCenters = await getPendingCentersByBatch(batchId);
+    // 1. Load the pending centers this pass will handle
+    const pendingCenters = await getPendingCentersByBatch(batchId, limit);
 
     if (!pendingCenters.length) {
       // Nothing left to enrich, but the stored tally can still be stale: it used
@@ -187,10 +202,17 @@ export async function POST(
       discarded: totals.discarded + discardedCount,
     });
 
-    const elapsedMs = Date.now() - startedAt;
-    console.log(`[enrich:${batchId}] Completed in ${elapsedMs}ms`);
+    // Centers past this chunk are untouched and still pending; totals counts rows,
+    // so whatever it does not account for is what is left to do.
+    const remaining =
+      totals.total - totals.enriched - totals.notFound - totals.skipped;
 
-    // Response reports what *this* run did; the batches row above holds the totals.
+    const elapsedMs = Date.now() - startedAt;
+    console.log(
+      `[enrich:${batchId}] Processed ${pendingCenters.length} in ${elapsedMs}ms, ${remaining} remaining`
+    );
+
+    // Response reports what *this* pass did; the batches row above holds the totals.
     return NextResponse.json({
       batchId,
       enriched: enrichedCount,
@@ -198,6 +220,9 @@ export async function POST(
       skipped: totals.skipped,
       discarded: discardedCount,
       duplicates: duplicateCount,
+      processed: pendingCenters.length,
+      remaining,
+      done: remaining === 0,
       elapsedMs,
     });
   } catch (err) {

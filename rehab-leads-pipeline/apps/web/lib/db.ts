@@ -468,12 +468,23 @@ export async function getBatchById(batchId: string): Promise<BatchSummary | null
 
 // ── Helpers used by API routes ────────────────────────────────────────────────
 
-export async function getPendingCentersByBatch(batchId: string): Promise<Center[]> {
-  const { data, error } = await supabase
+// `limit` caps how many pending centers a single enrichment pass takes on, so a
+// large batch can be worked through in chunks that each finish well inside the
+// gateway's ~30s ceiling. Omitted, the query is exactly as it always was.
+export async function getPendingCentersByBatch(
+  batchId: string,
+  limit?: number
+): Promise<Center[]> {
+  let query = supabase
     .from(TABLES.centers)
     .select("*")
     .eq("batch_id", batchId)
-    .eq("status", "pending");
+    .eq("status", "pending")
+    .order("created_at", { ascending: true });
+
+  if (limit != null) query = query.limit(limit);
+
+  const { data, error } = await query;
 
   if (error) throw new Error(`DB error in getPendingCentersByBatch: ${error.message}`);
   return (data ?? []).map((row) => mapCenter(row as DbCenterRow));
