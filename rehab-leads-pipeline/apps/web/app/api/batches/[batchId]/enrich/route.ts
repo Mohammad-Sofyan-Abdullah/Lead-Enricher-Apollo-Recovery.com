@@ -8,6 +8,7 @@ import {
   updateCenterStatuses,
   updateBatchStats,
   getBatchStats,
+  getBatchById,
 } from "@/lib/db";
 
 export async function POST(
@@ -30,6 +31,35 @@ export async function POST(
     const pendingCenters = await getPendingCentersByBatch(batchId);
 
     if (!pendingCenters.length) {
+      // Nothing left to enrich, but the stored tally can still be stale: it used
+      // to be written with just the finishing run's counts, so a batch processed
+      // over several runs kept the last (smallest) figure. Recount from the
+      // centers table and correct it. Idempotent — it derives every number from
+      // rows that already exist, so it cannot invent or lose data. Only written
+      // when it actually differs, to avoid pointless updates.
+      const totals = await getBatchStats(batchId);
+      const batch = await getBatchById(batchId);
+
+      if (
+        batch &&
+        (batch.enriched !== totals.enriched ||
+          batch.notFound !== totals.notFound ||
+          batch.skipped !== totals.skipped)
+      ) {
+        console.log(
+          `[enrich:${batchId}] Correcting stored tally: ` +
+            `enriched ${batch.enriched}->${totals.enriched}, ` +
+            `notFound ${batch.notFound}->${totals.notFound}, ` +
+            `skipped ${batch.skipped}->${totals.skipped}`
+        );
+        await updateBatchStats(batchId, {
+          enriched: totals.enriched,
+          notFound: totals.notFound,
+          skipped: totals.skipped,
+          discarded: totals.discarded,
+        });
+      }
+
       return NextResponse.json(
         { error: "Not found", detail: "No pending centers found for this batch" },
         { status: 404 }
