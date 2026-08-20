@@ -127,6 +127,7 @@ export function BatchesSection() {
     let enriched = 0;
     let notFound = 0;
     let processed = 0;
+    let lastRemaining = Infinity;
 
     try {
       while (true) {
@@ -153,6 +154,16 @@ export function BatchesSection() {
         processed += json.processed ?? 0;
 
         if (json.done || !json.processed) break;
+
+        // Every pass must leave less to do. If it does not, stop rather than
+        // hammering the endpoint forever.
+        if (json.remaining >= lastRemaining) {
+          toast.error(
+            `Enrichment stalled with ${json.remaining} centers left — kept ${enriched} leads. Press Enrich again to retry.`
+          );
+          return;
+        }
+        lastRemaining = json.remaining;
 
         toast.loading(
           `Enriching… ${processed} done, ${json.remaining} to go`,

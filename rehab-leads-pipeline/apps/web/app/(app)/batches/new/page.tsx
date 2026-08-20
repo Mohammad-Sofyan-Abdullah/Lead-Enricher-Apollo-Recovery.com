@@ -496,6 +496,7 @@ export default function NewBatchPage() {
       duplicates: 0,
     };
     let processed = 0;
+    let lastRemaining = Infinity;
 
     try {
       while (true) {
@@ -532,6 +533,16 @@ export default function NewBatchPage() {
 
         // `!json.processed` guards against an empty pass so this can never spin.
         if (json.done || !json.processed) break;
+
+        // Every pass must leave less to do; stop rather than loop forever if not.
+        if (remaining >= lastRemaining) {
+          setErrorMsg(
+            `Enrichment stalled with ${remaining} centers left — ${totals.enriched} leads from ${processed} centers were saved. Try Again resumes from there.`
+          );
+          setStep("error");
+          return;
+        }
+        lastRemaining = remaining;
       }
 
       setProgress(100);
